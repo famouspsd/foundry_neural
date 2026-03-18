@@ -1,81 +1,116 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
+from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
+import numpy as np
 
-# --- RESEARCHER CONFIG ---
-# This pulls your key from the Streamlit Cloud "Secrets" settings
+# --- 1. CONFIG & THEME ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except:
-    st.error("API Key not found. Please set GEMINI_API_KEY in Streamlit Secrets.")
+    st.error("API Key missing in Secrets.")
 
 model = genai.GenerativeModel('models/gemini-3-flash-preview')
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-st.set_page_config(page_title="Foundry Neural | Research Lab", page_icon="🔬", layout="wide")
+st.set_page_config(page_title="Foundry Neural", page_icon="♾️", layout="wide")
 
-# Minimalist Typography UI
+# Replit-Inspired Custom CSS
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #050505; color: #E0E0E0; }
-    .stTextInput>div>div>input { background-color: #111; border: 1px solid #333; color: white; }
-    .stButton>button { width: 100%; background-color: white; color: black; font-weight: 600; border-radius: 0px; }
+    /* Background and Global */
+    .stApp { background-color: #0e1117; color: #c9d1d9; }
+    
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
+    
+    /* Input Area Styling */
+    .stTextInput>div>div>input {
+        background-color: #0d1117;
+        color: white;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 20px;
+        font-size: 18px;
+    }
+    
+    /* Main Button Styling */
+    .stButton>button {
+        background-color: #238636;
+        color: white;
+        border-radius: 6px;
+        border: none;
+        padding: 10px 24px;
+        font-weight: 600;
+    }
+    
+    /* Header Font */
+    h1, h2, h3 { font-family: 'Inter', sans-serif; font-weight: 600; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
+# --- 2. LOGIC ---
+def get_pdf_text(pdf_file):
+    reader = PdfReader(pdf_file)
+    return " ".join([page.extract_text() for page in reader.pages])
+
 def load_vault():
-    try:
-        return pd.read_csv('vault.csv')
-    except:
-        return pd.DataFrame(columns=["Context", "Topic"])
+    try: return pd.read_csv('vault.csv')
+    except: return pd.DataFrame(columns=["Context", "Topic"])
 
-def save_vault(df):
-    df.to_csv('vault.csv', index=False)
+def semantic_search(query, df):
+    if df.empty: return "Foundational AI Ethics"
+    query_vec = embed_model.encode([query])[0]
+    vault_vecs = embed_model.encode(df['Context'].tolist())
+    similarities = np.dot(vault_vecs, query_vec) / (np.linalg.norm(vault_vecs, axis=1) * np.linalg.norm(query_vec))
+    return df.iloc[np.argmax(similarities)]['Context']
 
-st.title("🔬 Foundry Neural: Innovation Pipeline")
-tab1, tab2 = st.tabs(["🚀 Execute Innovation", "📂 Research Archive"])
-
-with tab2:
-    st.header("Memory Consolidation")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        new_context = st.text_area("New Knowledge/Hypothesis Cell:")
-    with col2:
-        new_topic = st.text_input("Domain:")
-        if st.button("CONSOLIDATE TO VAULT"):
-            if new_context:
-                df = load_vault()
-                new_row = pd.DataFrame({"Context": [new_context], "Topic": [new_topic]})
-                df = pd.concat([df, new_row], ignore_index=True)
-                save_vault(df)
-                st.success("Knowledge Cell Integrated.")
-                st.rerun()
-
+# --- 3. SIDEBAR (MANAGEMENT) ---
+with st.sidebar:
+    st.title("♾️ Foundry Lab")
     st.markdown("---")
-    vault_df = load_vault()
-    if not vault_df.empty:
-        st.table(vault_df)
-
-with tab1:
-    st.header("Strategic Research Query")
-    query = st.text_input("ENTER RESEARCH INQUIRY:", placeholder="How can we solve...")
     
-    if st.button("ACTIVATE REASONING"):
-        if query and not vault_df.empty:
-            with st.spinner("Synthesizing Innovation..."):
-                words = query.lower().split()
-                match = vault_df[vault_df.apply(lambda r: any(w in str(r['Context']).lower() for w in words), axis=1)]
-                context = match.iloc[0]['Context'] if not match.empty else "Global Optimization Foundations."
+    st.subheader("📂 Vault Storage")
+    vault_df = load_vault()
+    st.write(f"Knowledge Cells: {len(vault_df)}")
+    if st.checkbox("Show Raw Vault"):
+        st.dataframe(vault_df)
+    
+    st.markdown("---")
+    st.subheader("📄 PDF Ingestion")
+    uploaded_pdf = st.file_uploader("Drop research papers here", type="pdf")
+    if uploaded_pdf and st.button("Start Ingest"):
+        with st.spinner("Processing..."):
+            text = get_pdf_text(uploaded_pdf)
+            summary = model.generate_content(f"Technical summary for vault: {text[:4000]}").text
+            new_row = pd.DataFrame({"Context": [summary], "Topic": ["Automated Ingest"]})
+            pd.concat([vault_df, new_row]).to_csv('vault.csv', index=False)
+            st.success("Integrated.")
+            st.rerun()
 
-                prompt = f"""
-                SYSTEM: You are the Lead Scientist at Foundry Neural Labs. 
-                RESEARCHER ARCHIVE: {context}
-                INQUIRY: {query}
-                TASK: Propose a novel invention or framework to solve a global problem. Use LaTeX for math.
-                """
-                
-                response = model.generate_content(prompt)
-                st.subheader("💡 Proposed Innovation")
-                st.markdown(response.text)
-        else:
-            st.warning("Archive empty or no query entered.")
+# --- 4. MAIN INTERFACE (THE "REPLIT" HUB) ---
+st.markdown("<br><br>", unsafe_allow_html=True)
+col1, col2, col3 = st.columns([1, 4, 1])
+
+with col2:
+    st.markdown("<h1 style='text-align: center;'>What do you want to innovate?</h1>", unsafe_allow_html=True)
+    
+    query = st.text_input("", placeholder="Describe an invention or ask a research question...", label_visibility="collapsed")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 2])
+    with btn_col2:
+        activate = st.button("Activate Reasoning")
+
+    if activate and query:
+        with st.spinner("Synthesizing..."):
+            context = semantic_search(query, vault_df)
+            prompt = f"SYSTEM: Lead Scientist. CONTEXT: {context}. INQUIRY: {query}. TASK: Framework + LaTeX math."
+            response = model.generate_content(prompt)
+            
+            st.markdown("---")
+            st.markdown("### 💡 Theoretical Output")
+            st.markdown(response.text)
+    
