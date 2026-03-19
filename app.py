@@ -20,7 +20,7 @@ encoder, faiss_index = init_agent_memory()
 # --- 2. AGENT CONFIG ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 else:
     st.error("Missing GEMINI_API_KEY in Streamlit Secrets.")
     st.stop()
