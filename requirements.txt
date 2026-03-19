@@ -1,11 +1,6 @@
+google-genai
 streamlit
-google-generativeai
-pandas
-pypdf
-sentence-transformers
-numpy
-pillow
-fpdf2
 faiss-cpu
 sentence-transformers
-langchain-community
+pandas
+numpy
