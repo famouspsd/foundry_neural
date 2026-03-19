@@ -1,123 +1,91 @@
-import streamlit as st
+
+    import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import faiss
-import numpy as np
 import os
 from sentence_transformers import SentenceTransformer
-from PIL import Image
 
-# --- 1. THE NEURAL CORTEX (FAISS) ---
+# --- 1. THE CORTEX (FAISS + LOCAL ENCODER) ---
 @st.cache_resource
-def init_agent_memory():
-    # Local model for high-speed search without API costs
+def init_cortex():
     encoder = SentenceTransformer('all-MiniLM-L6-v2')
-    index = faiss.IndexFlatL2(384) 
+    index = faiss.IndexFlatL2(384)
     return encoder, index
 
-encoder, faiss_index = init_agent_memory()
+encoder, faiss_index = init_cortex()
 
-# --- 2. AGENT CONFIG ---
-if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-2.5-flash')
-else:
-    st.error("Missing GEMINI_API_KEY in Streamlit Secrets.")
-    st.stop()
+# --- 2. 2026 SDK CLIENT ---
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- 3. AUTONOMOUS TOOLS ---
-def autonomous_retrieval(query):
-    if not os.path.exists('vector_vault.csv'):
-        return "No local vault data. Using base intelligence."
+# --- 3. MEMORY TOOLS ---
+def recall_memory(query):
+    if not os.path.exists('vector_vault.csv'): return ""
     df = pd.read_csv('vector_vault.csv')
     query_vec = encoder.encode([query]).astype('float32')
-    # Pull the 2 most relevant pieces of memory
-    distances, indices = faiss_index.search(query_vec, k=2)
+    _, indices = faiss_index.search(query_vec, k=3)
     return " ".join(df.iloc[indices[0]]['Context'].values)
 
-# --- 4. THE DUAL-LOOP REASONING ENGINE ---
-def run_autonomous_agent(user_goal, image=None):
-    context = autonomous_retrieval(user_goal)
+def learn_new_insight(topic, insight):
+    # This is the "Learning" part of the loop
+    vector = encoder.encode([insight]).astype('float32')
+    faiss_index.add(vector)
+    pd.DataFrame({"Topic":[topic],"Context":[insight]}).to_csv(
+        'vector_vault.csv', mode='a', header=not os.path.exists('vector_vault.csv'), index=False
+    )
+
+# --- 4. THE DEEP THINKING ENGINE ---
+def deploy_agent(user_goal):
+    context = recall_memory(user_goal)
     
-    # PHASE 1: REASONING & DRAFTING
-    draft_prompt = f"""
-    [SYSTEM: REASONING PHASE]
-    Vault Context: {context}
-    Mission: {user_goal}
+    # Enable Gemini 3's Native Thinking
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(include_thoughts=True),
+        temperature=1.0 # Optimized for 2026 reasoning models
+    )
     
-    Task: Analyze the goal. Create a multi-step strategy. 
-    Include: Direct Solution, Pros/Cons Table, and Strategic Advice.
+    prompt = f"""
+    [MISSION] {user_goal}
+    [VAULT DATA] {context}
+    [INSTRUCTION] Think deeply. Evaluate pros/cons. Decide on the best move.
     """
     
-    try:
-        if image:
-            img = Image.open(image)
-            first_pass = model.generate_content([draft_prompt, img]).text
+    response = client.models.generate_content(
+        model='gemini-3-flash', # Using the latest 2026 reasoning model
+        contents=prompt,
+        config=config
+    )
+    
+    # Extract thought and final answer
+    thought_process = ""
+    final_answer = ""
+    
+    for part in response.candidates[0].content.parts:
+        if part.thought:
+            thought_process += part.text
         else:
-            first_pass = model.generate_content(draft_prompt).text
+            final_answer += part.text
             
-        # PHASE 2: AUTONOMOUS SELF-CORRECTION
-        correction_prompt = f"""
-        [SYSTEM: CRITIQUE & CORRECTION PHASE]
-        Original Mission: {user_goal}
-        Draft Generated: {first_pass}
+    return thought_process, final_answer
+
+# --- 5. UI ---
+st.title("🤖 Foundry Neural: Autonomous Agent v3")
+
+user_mission = st.text_input("Deploy Mission:", placeholder="What should I analyze today?")
+
+if st.button("EXECUTE MISSION") and user_mission:
+    with st.status("Agent is Thinking...", expanded=True) as status:
+        thought, answer = deploy_agent(user_mission)
         
-        Task: Review the draft for logic gaps or missed opportunities. 
-        Ensure the 'Lead Scientist' advice is bold and actionable.
-        Rewrite the final response to be perfect.
-        """
-        final_output = model.generate_content(correction_prompt).text
-        return final_output
-    except Exception as e:
-        if "429" in str(e):
-            return "🚨 Quota Limit Reached. Agent is cooling down for 60s."
-        return f"Agent Error: {e}"
-
-# --- 5. UI DESIGN ---
-st.set_page_config(page_title="Foundry Neural: Autonomous", layout="wide", page_icon="🤖")
-
-# --- SIDEBAR: MEMORY CONTROL ---
-with st.sidebar:
-    st.title("🧠 Neural Management")
-    
-    with st.expander("➕ Ingest New Knowledge", expanded=False):
-        t = st.text_input("Topic")
-        c = st.text_area("Context/Data")
-        if st.button("SYNC TO VECTOR SPACE"):
-            if t and c:
-                vector = encoder.encode([c]).astype('float32')
-                faiss_index.add(vector)
-                pd.DataFrame({"Topic":[t],"Context":[c]}).to_csv('vector_vault.csv', mode='a', header=not os.path.exists('vector_vault.csv'), index=False)
-                st.success(f"'{t}' integrated into cortex.")
-    
-    st.divider()
-    
-    if st.button("🗑️ RESET AGENT MEMORY"):
-        if os.path.exists('vector_vault.csv'):
-            os.remove('vector_vault.csv')
-            st.rerun()
-
-    st.divider()
-    uploaded_img = st.file_uploader("📷 Visual Context (Vision)", type=["jpg","png","jpeg"])
-
-# --- MAIN INTERFACE ---
-st.title("🤖 Foundry Neural: Autonomous Agent")
-st.caption("Status: Multi-Step Reasoning Enabled | FAISS Vector Cortex: Active")
-
-user_input = st.text_input("Deploy Mission:", placeholder="What should we solve today?")
-
-if st.button("DEPLOY AGENT") and user_input:
-    # Use st.status for that "Agent-Like" feeling
-    with st.status("Agent is Processing...", expanded=True) as status:
-        st.write("🔍 Accessing Vector Memory...")
-        st.write("📝 Drafting Initial Strategy...")
-        st.write("⚖️ Performing Self-Correction Loop...")
+        with st.expander("🧠 View Internal Reasoning (Chain of Thought)"):
+            st.info(thought)
         
-        result = run_autonomous_agent(user_input, uploaded_img)
-        status.update(label="Mission Accomplished!", state="complete")
-    
-    st.markdown("---")
-    st.markdown(result)
+        st.markdown(answer)
+        
+        # SELF-LEARNING STEP: The agent saves its own conclusion to the vault
+        learn_new_insight("Autonomous Conclusion", f"Task: {user_mission} | Result: {answer[:200]}")
+        status.update(label="Mission Accomplished & Learned!", state="complete")
     
     
 
