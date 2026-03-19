@@ -67,9 +67,7 @@ with st.sidebar:
         pd.concat([df, new_row]).to_csv('vault.csv', index=False)
         st.success("Synced!")
 
-# --- MAIN INTERFACE ---
-st.title("Foundry Neural Synthesis")
-query = st.text_input("Enter Research Inquiry", placeholder="Ask your lab...")
+
 
 # --- MAIN HUB ---
 st.markdown("<h1 style='text-align: center;'>Foundry Neural Synthesis</h1>", unsafe_allow_html=True)
