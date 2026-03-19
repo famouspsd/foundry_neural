@@ -5,94 +5,120 @@ import faiss
 import numpy as np
 import os
 from sentence_transformers import SentenceTransformer
-from fpdf import FPDF
+from PIL import Image
 
-# --- 1. CORE ENGINES ---
-st.set_page_config(page_title="Foundry Neural: Vector Labs", page_icon="🧬")
-
+# --- 1. THE NEURAL CORTEX (FAISS) ---
 @st.cache_resource
-def load_resources():
-    # This turns your text into math (Vectors)
+def init_agent_memory():
+    # Local model for high-speed search without API costs
     encoder = SentenceTransformer('all-MiniLM-L6-v2')
-    # FAISS Index (384 dimensions for this specific encoder)
-    index = faiss.IndexFlatL2(384)
+    index = faiss.IndexFlatL2(384) 
     return encoder, index
 
-encoder, faiss_index = load_resources()
+encoder, faiss_index = init_agent_memory()
 
-# --- 2. CONFIG & API ---
+# --- 2. AGENT CONFIG ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('models/gemini-3-flash-preview')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    st.error("Missing API Key in Secrets!")
+    st.error("Missing GEMINI_API_KEY in Streamlit Secrets.")
     st.stop()
 
-# --- 3. THE MEMORY VAULT FUNCTIONS ---
-def get_vault_data():
-    if os.path.exists('vault_vectors.csv'):
-        return pd.read_csv('vault_vectors.csv')
-    return pd.DataFrame(columns=["Topic", "Context"])
+# --- 3. AUTONOMOUS TOOLS ---
+def autonomous_retrieval(query):
+    if not os.path.exists('vector_vault.csv'):
+        return "No local vault data. Using base intelligence."
+    df = pd.read_csv('vector_vault.csv')
+    query_vec = encoder.encode([query]).astype('float32')
+    # Pull the 2 most relevant pieces of memory
+    distances, indices = faiss_index.search(query_vec, k=2)
+    return " ".join(df.iloc[indices[0]]['Context'].values)
 
-def sync_to_faiss(topic, context):
-    # 1. Vectorize the text
-    vector = encoder.encode([context]).astype('float32')
-    # 2. Add to the FAISS index
-    faiss_index.add(vector)
-    # 3. Save a text backup
-    df = get_vault_data()
-    new_row = pd.DataFrame({"Topic": [topic], "Context": [context]})
-    pd.concat([df, new_row], ignore_index=True).to_csv('vault_vectors.csv', index=False)
-
-def vector_search(query, k=1):
-    df = get_vault_data()
-    if df.empty or faiss_index.ntotal == 0:
-        return "General Intelligence Mode (No vault data found)."
+# --- 4. THE DUAL-LOOP REASONING ENGINE ---
+def run_autonomous_agent(user_goal, image=None):
+    context = autonomous_retrieval(user_goal)
     
-    # Search the "Map" for the closest match
-    query_vector = encoder.encode([query]).astype('float32')
-    distances, indices = faiss_index.search(query_vector, k)
+    # PHASE 1: REASONING & DRAFTING
+    draft_prompt = f"""
+    [SYSTEM: REASONING PHASE]
+    Vault Context: {context}
+    Mission: {user_goal}
     
-    # Get the best text match
-    return df.iloc[indices[0][0]]['Context']
-
-# --- 4. THE UI ---
-st.title("🧬 Foundry Neural")
-
-with st.sidebar:
-    st.header(" Memory")
-    t = st.text_input("Topic")
-    c = st.text_area("Context/Rule")
-    if st.button("SYNC TO FAISS"):
-        sync_to_faiss(t, c)
-        st.success("Memory Vectorized!")
-
-# --- 5. ADVISOR LOGIC ---
-user_query = st.text_input("What is the situation?", placeholder="Ask for advice...")
-
-if st.button("ACTIVATE ADVISOR") and user_query:
-    with st.spinner("Searching Vector Space..."):
-        # Local search (doesn't use API quota!)
-        relevant_context = vector_search(user_query)
+    Task: Analyze the goal. Create a multi-step strategy. 
+    Include: Direct Solution, Pros/Cons Table, and Strategic Advice.
+    """
+    
+    try:
+        if image:
+            img = Image.open(image)
+            first_pass = model.generate_content([draft_prompt, img]).text
+        else:
+            first_pass = model.generate_content(draft_prompt).text
+            
+        # PHASE 2: AUTONOMOUS SELF-CORRECTION
+        correction_prompt = f"""
+        [SYSTEM: CRITIQUE & CORRECTION PHASE]
+        Original Mission: {user_goal}
+        Draft Generated: {first_pass}
         
-        # Smart Prompt (Smaller = Safer for Quota)
-        prompt = f"""
-        Advisor Role: Strategic Peer.
-        Vault Memory: {relevant_context}
-        Inquiry: {user_query}
-        
-        Provide:
-        1. Direct Answer.
-        2. Pros/Cons Table.
-        3. Lead Scientist Advice.
+        Task: Review the draft for logic gaps or missed opportunities. 
+        Ensure the 'Lead Scientist' advice is bold and actionable.
+        Rewrite the final response to be perfect.
         """
-        
-        resp = model.generate_content(prompt)
-        st.session_state.advice = resp.text
+        final_output = model.generate_content(correction_prompt).text
+        return final_output
+    except Exception as e:
+        if "429" in str(e):
+            return "🚨 Quota Limit Reached. Agent is cooling down for 60s."
+        return f"Agent Error: {e}"
 
-if 'advice' in st.session_state:
+# --- 5. UI DESIGN ---
+st.set_page_config(page_title="Foundry Neural: Autonomous", layout="wide", page_icon="🤖")
+
+# --- SIDEBAR: MEMORY CONTROL ---
+with st.sidebar:
+    st.title("🧠 Neural Management")
+    
+    with st.expander("➕ Ingest New Knowledge", expanded=False):
+        t = st.text_input("Topic")
+        c = st.text_area("Context/Data")
+        if st.button("SYNC TO VECTOR SPACE"):
+            if t and c:
+                vector = encoder.encode([c]).astype('float32')
+                faiss_index.add(vector)
+                pd.DataFrame({"Topic":[t],"Context":[c]}).to_csv('vector_vault.csv', mode='a', header=not os.path.exists('vector_vault.csv'), index=False)
+                st.success(f"'{t}' integrated into cortex.")
+    
+    st.divider()
+    
+    if st.button("🗑️ RESET AGENT MEMORY"):
+        if os.path.exists('vector_vault.csv'):
+            os.remove('vector_vault.csv')
+            st.rerun()
+
+    st.divider()
+    uploaded_img = st.file_uploader("📷 Visual Context (Vision)", type=["jpg","png","jpeg"])
+
+# --- MAIN INTERFACE ---
+st.title("🤖 Foundry Neural: Autonomous Agent")
+st.caption("Status: Multi-Step Reasoning Enabled | FAISS Vector Cortex: Active")
+
+user_input = st.text_input("Deploy Mission:", placeholder="What should we solve today?")
+
+if st.button("DEPLOY AGENT") and user_input:
+    # Use st.status for that "Agent-Like" feeling
+    with st.status("Agent is Processing...", expanded=True) as status:
+        st.write("🔍 Accessing Vector Memory...")
+        st.write("📝 Drafting Initial Strategy...")
+        st.write("⚖️ Performing Self-Correction Loop...")
+        
+        result = run_autonomous_agent(user_input, uploaded_img)
+        status.update(label="Mission Accomplished!", state="complete")
+    
     st.markdown("---")
-    st.markdown(st.session_state.advice)
+    st.markdown(result)
+    
     
 
             
