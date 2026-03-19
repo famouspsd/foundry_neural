@@ -71,41 +71,48 @@ with st.sidebar:
 st.title("Foundry Neural Synthesis")
 query = st.text_input("Enter Research Inquiry", placeholder="Ask your lab...")
 
+# --- MAIN HUB ---
+st.markdown("<h1 style='text-align: center;'>Foundry Neural Synthesis</h1>", unsafe_allow_html=True)
+
+query = st.text_input("", placeholder="Enter inquiry...", label_visibility="collapsed")
+
+# Create a placeholder for the output so it stays on screen
+output_container = st.container()
+
 if st.button("ACTIVATE REASONING") and query:
-    with st.spinner("Processing..."):
+    with st.spinner("Synthesizing..."):
         vault_df = load_vault()
-        # Simple context pull for stability
-        context = vault_df['Context'].iloc[0] if not vault_df.empty else "General Knowledge"
+        # Pull the most relevant context
+        context = vault_df['Context'].iloc[0] if not vault_df.empty else "Standard Research Logic"
         
         if uploaded_img:
             img = Image.open(uploaded_img)
-            resp = model.generate_content([f"Vault: {context}\n\nTask: {query}", img])
+            resp = model.generate_content([f"Context: {context}\nTask: {query}", img])
         else:
-            resp = model.generate_content(f"Vault: {context}\n\nTask: {query}")
+            resp = model.generate_content(f"Context: {context}\nTask: {query}")
         
-        st.session_state.out = resp.text
-        st.markdown(st.session_state.out)
+        # Save to session state so it survives the refresh
+        st.session_state.research_text = resp.text
 
-if 'out' in st.session_state:
-    st.download_button("📥 DOWNLOAD PDF", data=create_safe_pdf(st.session_state.out), file_name="research.pdf")
-                                                          
-    
-# --- FINAL OUTPUT & DOWNLOAD ---
-if 'out' in st.session_state and st.session_state.out:
-    st.markdown("---")
-    st.markdown("### 🔬 Synthesis Result")
-    st.markdown(st.session_state.out)
-    
-    # Generate the PDF only when content is ready
-    try:
-        pdf_data = create_safe_pdf(st.session_state.out)
-        st.download_button(
-            label="📥 DOWNLOAD RESEARCH PDF",
-            data=pdf_data,
-            file_name="Foundry_Research.pdf",
-            mime="application/pdf"
-        )
-    except Exception as e:
-        st.warning("PDF preparation in progress... please wait a moment.")
+# Display the result if it exists in memory
+if 'research_text' in st.session_state:
+    with output_container:
+        st.markdown("---")
+        st.markdown("### 💡 Theoretical Output")
+        st.markdown(st.session_state.research_text)
+        
+        # Build the PDF only inside this 'if' block
+        try:
+            pdf_bytes = create_safe_pdf(st.session_state.research_text)
+            st.download_button(
+                label="📥 DOWNLOAD RESEARCH PDF",
+                data=pdf_bytes,
+                file_name="Foundry_Research.pdf",
+                mime="application/pdf",
+                key="download_btn_unique" # Unique key prevents state collision
+            )
+        except Exception as e:
+            st.info("Finalizing document encoding...")
+            
     
             
