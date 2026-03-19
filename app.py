@@ -52,7 +52,7 @@ def deploy_agent(user_goal):
     """
     
     response = client.models.generate_content(
-        model='gemini-3-flash', # Using the latest 2026 reasoning model
+        model='gemini-2.0-flash', # Using the latest 2026 reasoning model
         contents=prompt,
         config=config
     )
