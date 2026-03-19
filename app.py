@@ -90,5 +90,22 @@ if 'out' in st.session_state:
     st.download_button("📥 DOWNLOAD PDF", data=create_safe_pdf(st.session_state.out), file_name="research.pdf")
                                                           
     
-
+# --- FINAL OUTPUT & DOWNLOAD ---
+if 'out' in st.session_state and st.session_state.out:
+    st.markdown("---")
+    st.markdown("### 🔬 Synthesis Result")
+    st.markdown(st.session_state.out)
+    
+    # Generate the PDF only when content is ready
+    try:
+        pdf_data = create_safe_pdf(st.session_state.out)
+        st.download_button(
+            label="📥 DOWNLOAD RESEARCH PDF",
+            data=pdf_data,
+            file_name="Foundry_Research.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.warning("PDF preparation in progress... please wait a moment.")
+    
             
