@@ -1,119 +1,99 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-from pypdf import PdfReader
-from fpdf import FPDF
-from sentence_transformers import SentenceTransformer
+import faiss
 import numpy as np
-from PIL import Image
+import os
+from sentence_transformers import SentenceTransformer
+from fpdf import FPDF
 
-# --- CONFIG ---
+# --- 1. CORE ENGINES ---
+st.set_page_config(page_title="Foundry Neural: Vector Labs", page_icon="🧬")
+
+@st.cache_resource
+def load_resources():
+    # This turns your text into math (Vectors)
+    encoder = SentenceTransformer('all-MiniLM-L6-v2')
+    # FAISS Index (384 dimensions for this specific encoder)
+    index = faiss.IndexFlatL2(384)
+    return encoder, index
+
+encoder, faiss_index = load_resources()
+
+# --- 2. CONFIG & API ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('models/gemini-3-flash-preview')
 else:
-    st.error("API Key not found!")
+    st.error("Missing API Key in Secrets!")
     st.stop()
 
-@st.cache_resource
-def load_embedder():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+# --- 3. THE MEMORY VAULT FUNCTIONS ---
+def get_vault_data():
+    if os.path.exists('vault_vectors.csv'):
+        return pd.read_csv('vault_vectors.csv')
+    return pd.DataFrame(columns=["Topic", "Context"])
 
-embed_model = load_embedder()
-
-# --- FUNCTIONS ---
-def load_vault():
-    try:
-        return pd.read_csv('vault.csv')
-    except:
-        # Create it if it doesn't exist
-        df = pd.DataFrame(columns=["Topic", "Context"])
-        df.to_csv('vault.csv', index=False)
-        return df
-
-def save_to_vault(topic, context):
-    df = load_vault()
+def sync_to_faiss(topic, context):
+    # 1. Vectorize the text
+    vector = encoder.encode([context]).astype('float32')
+    # 2. Add to the FAISS index
+    faiss_index.add(vector)
+    # 3. Save a text backup
+    df = get_vault_data()
     new_row = pd.DataFrame({"Topic": [topic], "Context": [context]})
-    updated_df = pd.concat([df, new_row], ignore_index=True)
-    updated_df.to_csv('vault.csv', index=False)
+    pd.concat([df, new_row], ignore_index=True).to_csv('vault_vectors.csv', index=False)
 
-def create_safe_pdf(text):
-    clean_text = text.encode('latin-1', 'replace').decode('latin-1')
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=12)
-    pdf.multi_cell(0, 10, txt=clean_text)
-    return pdf.output()
-
-# --- SIDEBAR: DIRECT VAULT UPDATE ---
-with st.sidebar:
-    st.title("🛡️ Vault Management")
+def vector_search(query, k=1):
+    df = get_vault_data()
+    if df.empty or faiss_index.ntotal == 0:
+        return "General Intelligence Mode (No vault data found)."
     
-    with st.expander("➕ Add Direct Entry", expanded=True):
-        new_topic = st.text_input("Topic (e.g., Advisor Logic)")
-        new_context = st.text_area("Context (The actual data/rule)")
-        if st.button("🚀 COMMIT TO VAULT"):
-            if new_topic and new_context:
-                save_to_vault(new_topic, new_context)
-                st.success(f"Added '{new_topic}' to memory!")
-            else:
-                st.warning("Please fill both fields.")
+    # Search the "Map" for the closest match
+    query_vector = encoder.encode([query]).astype('float32')
+    distances, indices = faiss_index.search(query_vector, k)
+    
+    # Get the best text match
+    return df.iloc[indices[0][0]]['Context']
 
-    st.markdown("---")
-    uploaded_img = st.file_uploader("Visual Input (Vision)", type=["jpg", "png", "jpeg"])
+# --- 4. THE UI ---
+st.title("🧬 Foundry Neural")
 
-# --- MAIN HUB ---
-st.title("Foundry Neural: Strategic Advisor")
+with st.sidebar:
+    st.header(" Memory")
+    t = st.text_input("Topic")
+    c = st.text_area("Context/Rule")
+    if st.button("SYNC TO FAISS"):
+        sync_to_faiss(t, c)
+        st.success("Memory Vectorized!")
 
-query = st.text_input("What is on your mind?", placeholder="Ask for advice, a decision, or research...")
+# --- 5. ADVISOR LOGIC ---
+user_query = st.text_input("What is the situation?", placeholder="Ask for advice...")
 
-if st.button("ACTIVATE ADVISOR") and query:
-    with st.spinner("Consulting the Vault..."):
-        vault_df = load_vault()
+if st.button("ACTIVATE ADVISOR") and user_query:
+    with st.spinner("Searching Vector Space..."):
+        # Local search (doesn't use API quota!)
+        relevant_context = vector_search(user_query)
         
-        # Simple retrieval: search for relevant context
-        context_str = "Standard Advisor Logic"
-        if not vault_df.empty:
-            # We use the first few rows as a base if semantic search isn't needed for simple advice
-            context_str = " ".join(vault_df['Context'].tail(5).tolist())
-
-        # The "Friendly Advisor" Prompt
+        # Smart Prompt (Smaller = Safer for Quota)
         prompt = f"""
-        You are the Foundry Neural Strategic Advisor. 
-        Context from Vault: {context_str}
+        Advisor Role: Strategic Peer.
+        Vault Memory: {relevant_context}
+        Inquiry: {user_query}
         
-        User Inquiry: {query}
-        
-        Please provide your response in this format:
-        1. Friendly, Direct Answer.
-        2. Pros and Cons Table.
-        3. 'Lead Scientist' Advice (Strategic next steps).
+        Provide:
+        1. Direct Answer.
+        2. Pros/Cons Table.
+        3. Lead Scientist Advice.
         """
         
-        if uploaded_img:
-            img = Image.open(uploaded_img)
-            resp = model.generate_content([prompt, img])
-        else:
-            resp = model.generate_content(prompt)
-            
-        st.session_state.advice_out = resp.text
+        resp = model.generate_content(prompt)
+        st.session_state.advice = resp.text
 
-# --- OUTPUT & DOWNLOAD ---
-if 'advice_out' in st.session_state:
+if 'advice' in st.session_state:
     st.markdown("---")
-    st.markdown(st.session_state.advice_out)
+    st.markdown(st.session_state.advice)
     
-    try:
-        pdf_bytes = create_safe_pdf(st.session_state.advice_out)
-        st.download_button(
-            label="📥 DOWNLOAD ADVICE REPORT",
-            data=pdf_bytes,
-            file_name="Strategic_Advice.pdf",
-            mime="application/pdf",
-            key="advice_download"
-        )
-    except:
-        st.info("Generating PDF...")
 
             
     
