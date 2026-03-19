@@ -88,6 +88,18 @@ if 'last_output' in st.session_state:
         file_name="Foundry_Research_Export.pdf",
         mime="application/pdf"
     )
+    def create_pdf(text):
+    # Use 'latin-1' safe encoding by replacing non-standard characters
+    # This prevents the UnicodeEncodingException
+    clean_text = text.encode('latin-1', 'replace').decode('latin-1')
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12) # Helvetica is safer for standard exports
+    pdf.multi_cell(0, 10, txt=clean_text)
+    
+    # Return as bytes
+    return pdf.output()
     
 
     
