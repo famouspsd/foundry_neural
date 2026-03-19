@@ -1,27 +1,18 @@
 import streamlit as st
 import pandas as pd
-
-# --- EMERGENCY BOOT CHECK ---
-st.set_page_config(page_title="Foundry Neural Labs", page_icon="🔬", layout="wide")
-
-try:
-    import google.generativeai as genai
-    from pypdf import PdfReader
-    from fpdf import FPDF
-    from sentence_transformers import SentenceTransformer
-    import numpy as np
-    from PIL import Image
-except Exception as e:
-    st.error(f"Initialization Failed. Missing library: {e}")
-    st.stop()
+import google.generativeai as genai
+from pypdf import PdfReader
+from fpdf import FPDF
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from PIL import Image
 
 # --- CONFIG ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('models/gemini-3-flash-preview')
-    
 else:
-    st.error("API Key not found in Secrets!")
+    st.error("API Key not found!")
     st.stop()
 
 @st.cache_resource
@@ -30,19 +21,21 @@ def load_embedder():
 
 embed_model = load_embedder()
 
-# --- UI THEME ---
-st.markdown("""
-    <style>
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    section[data-testid="stSidebar"] { background-color: #161b22 !important; border-right: 1px solid #30363d; }
-    .stButton>button { background-color: #238636; color: white; border-radius: 6px; width: 100%; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- APP LOGIC ---
+# --- FUNCTIONS ---
 def load_vault():
-    try: return pd.read_csv('vault.csv')
-    except: return pd.DataFrame(columns=["Context", "Topic"])
+    try:
+        return pd.read_csv('vault.csv')
+    except:
+        # Create it if it doesn't exist
+        df = pd.DataFrame(columns=["Topic", "Context"])
+        df.to_csv('vault.csv', index=False)
+        return df
+
+def save_to_vault(topic, context):
+    df = load_vault()
+    new_row = pd.DataFrame({"Topic": [topic], "Context": [context]})
+    updated_df = pd.concat([df, new_row], ignore_index=True)
+    updated_df.to_csv('vault.csv', index=False)
 
 def create_safe_pdf(text):
     clean_text = text.encode('latin-1', 'replace').decode('latin-1')
@@ -52,65 +45,76 @@ def create_safe_pdf(text):
     pdf.multi_cell(0, 10, txt=clean_text)
     return pdf.output()
 
-# --- SIDEBAR ---
+# --- SIDEBAR: DIRECT VAULT UPDATE ---
 with st.sidebar:
-    st.title("➕ Lab Inputs")
-    uploaded_img = st.file_uploader("Upload Image (Vision)", type=["jpg", "png", "jpeg"])
-    st.markdown("---")
-    uploaded_pdf = st.file_uploader("Ingest Research PDF", type="pdf")
+    st.title("🛡️ Vault Management")
     
-    if uploaded_pdf and st.button("SYNC PDF"):
-        reader = PdfReader(uploaded_pdf)
-        text = " ".join([p.extract_text() for p in reader.pages])
-        df = load_vault()
-        new_row = pd.DataFrame({"Context": [text[:2000]], "Topic": ["Manual Ingest"]})
-        pd.concat([df, new_row]).to_csv('vault.csv', index=False)
-        st.success("Synced!")
+    with st.expander("➕ Add Direct Entry", expanded=True):
+        new_topic = st.text_input("Topic (e.g., Advisor Logic)")
+        new_context = st.text_area("Context (The actual data/rule)")
+        if st.button("🚀 COMMIT TO VAULT"):
+            if new_topic and new_context:
+                save_to_vault(new_topic, new_context)
+                st.success(f"Added '{new_topic}' to memory!")
+            else:
+                st.warning("Please fill both fields.")
 
-
+    st.markdown("---")
+    uploaded_img = st.file_uploader("Visual Input (Vision)", type=["jpg", "png", "jpeg"])
 
 # --- MAIN HUB ---
-st.markdown("<h1 style='text-align: center;'>Foundry Neural Synthesis</h1>", unsafe_allow_html=True)
+st.title("Foundry Neural: Strategic Advisor")
 
-query = st.text_input("", placeholder="Enter inquiry...", label_visibility="collapsed")
+query = st.text_input("What is on your mind?", placeholder="Ask for advice, a decision, or research...")
 
-# Create a placeholder for the output so it stays on screen
-output_container = st.container()
-
-if st.button("ACTIVATE REASONING") and query:
-    with st.spinner("Synthesizing..."):
+if st.button("ACTIVATE ADVISOR") and query:
+    with st.spinner("Consulting the Vault..."):
         vault_df = load_vault()
-        # Pull the most relevant context
-        context = vault_df['Context'].iloc[0] if not vault_df.empty else "Standard Research Logic"
+        
+        # Simple retrieval: search for relevant context
+        context_str = "Standard Advisor Logic"
+        if not vault_df.empty:
+            # We use the first few rows as a base if semantic search isn't needed for simple advice
+            context_str = " ".join(vault_df['Context'].tail(5).tolist())
+
+        # The "Friendly Advisor" Prompt
+        prompt = f"""
+        You are the Foundry Neural Strategic Advisor. 
+        Context from Vault: {context_str}
+        
+        User Inquiry: {query}
+        
+        Please provide your response in this format:
+        1. Friendly, Direct Answer.
+        2. Pros and Cons Table.
+        3. 'Lead Scientist' Advice (Strategic next steps).
+        """
         
         if uploaded_img:
             img = Image.open(uploaded_img)
-            resp = model.generate_content([f"Context: {context}\nTask: {query}", img])
+            resp = model.generate_content([prompt, img])
         else:
-            resp = model.generate_content(f"Context: {context}\nTask: {query}")
-        
-        # Save to session state so it survives the refresh
-        st.session_state.research_text = resp.text
+            resp = model.generate_content(prompt)
+            
+        st.session_state.advice_out = resp.text
 
-# Display the result if it exists in memory
-if 'research_text' in st.session_state:
-    with output_container:
-        st.markdown("---")
-        st.markdown("### 💡 Theoretical Output")
-        st.markdown(st.session_state.research_text)
-        
-        # Build the PDF only inside this 'if' block
-        try:
-            pdf_bytes = create_safe_pdf(st.session_state.research_text)
-            st.download_button(
-                label="📥 DOWNLOAD RESEARCH PDF",
-                data=pdf_bytes,
-                file_name="Foundry_Research.pdf",
-                mime="application/pdf",
-                key="download_btn_unique" # Unique key prevents state collision
-            )
-        except Exception as e:
-            st.info("Finalizing document encoding...")
+# --- OUTPUT & DOWNLOAD ---
+if 'advice_out' in st.session_state:
+    st.markdown("---")
+    st.markdown(st.session_state.advice_out)
+    
+    try:
+        pdf_bytes = create_safe_pdf(st.session_state.advice_out)
+        st.download_button(
+            label="📥 DOWNLOAD ADVICE REPORT",
+            data=pdf_bytes,
+            file_name="Strategic_Advice.pdf",
+            mime="application/pdf",
+            key="advice_download"
+        )
+    except:
+        st.info("Generating PDF...")
+
             
     
             
